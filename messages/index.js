@@ -1,3 +1,3 @@
 const AuthenticationMessages = require('./authentication');
-
-module.exports = { AuthenticationMessages };
+const PaymentMessages = require('./payment');   
+module.exports = { AuthenticationMessages, PaymentMessages };
