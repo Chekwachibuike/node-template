@@ -2,6 +2,7 @@ const validator = require('@app-core/validator');
 const { throwAppError, ERROR_CODE } = require('@app-core/errors');
 const { appLogger } = require('@app-core/logger');
 const parseInstruction = require('../../services/payment-processor/parse-instruction');
+const PaymentMessages = require('@app/messages/payment') || require('@app/messages');
 
 // Validation spec for the request body
 const requestSpec = `root {
@@ -17,60 +18,51 @@ const requestSpec = `root {
 const parsedRequestSpec = validator.parse(requestSpec);
 
 /**
- * Process payment instruction endpoint
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- * @returns {Promise<void>}
+ * Process payment instruction
+ * @param {Object} params - The request parameters
+ * @param {Array} params.accounts - Array of account objects
+ * @param {string} params.instruction - The payment instruction
+ * @returns {Promise<Object>} The result of the payment instruction
  */
-module.exports = async function processPaymentInstruction(req, res) {
+async function processPaymentInstruction({ accounts, instruction }) {
   try {
     // 1. Validate request body structure
-    let requestData;
-    try {
-      requestData = validator.validate(req.body, parsedRequestSpec);
-    } catch (validationError) {
-      return res.status(400).json({
-        type: null,
-        amount: null,
-        currency: null,
-        debit_account: null,
-        credit_account: null,
-        execute_by: null,
-        status: 'failed',
-        status_reason: 'Invalid request format: ' + validationError.message,
-        status_code: 'SY03',
-        accounts: []
-      });
+    validator.validate({ accounts, instruction }, parsedRequestSpec);
+    
+    // 2. Parse the instruction - it handles all validation and returns the complete response
+    const result = await parseInstruction({ accounts, instruction });
+    
+    // 3. For error cases where accounts are missing but account IDs are present,
+    //    we need to include the accounts with unchanged balances
+    if (result.status === 'failed' && result.accounts.length === 0 
+        && result.debit_account && result.credit_account) {
+      const debitAccount = accounts.find(acc => acc.id === result.debit_account);
+      const creditAccount = accounts.find(acc => acc.id === result.credit_account);
+      
+      if (debitAccount && creditAccount) {
+        result.accounts = [
+          {
+            id: debitAccount.id,
+            balance: debitAccount.balance,
+            balance_before: debitAccount.balance,
+            currency: debitAccount.currency
+          },
+          {
+            id: creditAccount.id,
+            balance: creditAccount.balance,
+            balance_before: creditAccount.balance,
+            currency: creditAccount.currency
+          }
+        ];
+      }
     }
-
-    // 2. Call the service layer to parse + execute
-    const response = await parseInstruction(requestData);
-
-    // 3. Return the response from service
-    return res.status(200).json(response);
-
+    
+    return result;
   } catch (error) {
-    // Log the error using the project's logger
-    appLogger.errorX(error, 'process-instruction-endpoint-error');
-
-    // Handle validation errors from service
-    if (error.isAppError) {
-      return res.status(200).json({
-        type: null,
-        amount: null,
-        currency: null,
-        debit_account: null,
-        credit_account: null,
-        execute_by: null,
-        status: 'failed',
-        status_reason: error.message,
-        status_code: error.code || 'APPERR',
-        accounts: []
-      });
-    }
-
-    // Handle unexpected errors
-    return res.status(500).json({
+    appLogger.errorX(error, 'payment-instruction-error');
+    
+    // For validation errors from the validator, return SY03 error
+    return {
       type: null,
       amount: null,
       currency: null,
@@ -78,9 +70,11 @@ module.exports = async function processPaymentInstruction(req, res) {
       credit_account: null,
       execute_by: null,
       status: 'failed',
-      status_reason: 'Internal server error',
-      status_code: 'APPERR',
+      status_reason: error.message || PaymentMessages.MALFORMED_INSTRUCTION || 'Malformed instruction: unable to parse keywords',
+      status_code: 'SY03',
       accounts: []
-    });
+    };
   }
-};
+}
+
+module.exports = processPaymentInstruction;

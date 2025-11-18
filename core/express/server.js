@@ -222,11 +222,16 @@ function Server(serverConfig = {}) {
         }
 
         responseComponents.statusCode = result.status || 200;
-        responseComponents.body.status = 'success';
-        responseComponents.body.message = result.message;
-        responseComponents.body.data = result.data || {};
-
-        expressResponse.status(responseComponents.statusCode).json(responseComponents.body);
+        
+        // If raw flag is set, return data directly without wrapping
+        if (result.raw === true) {
+          expressResponse.status(responseComponents.statusCode).json(result.data || {});
+        } else {
+          responseComponents.body.status = 'success';
+          responseComponents.body.message = result.message;
+          responseComponents.body.data = result.data || {};
+          expressResponse.status(responseComponents.statusCode).json(responseComponents.body);
+        }
       } catch (error) {
         const statusCode = !error.isApplicationError
           ? 500
